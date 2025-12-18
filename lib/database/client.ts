@@ -109,6 +109,38 @@ export async function initializeDatabase() {
         UNIQUE(service_id, date)
       );
 
+      CREATE TABLE IF NOT EXISTS user_services (
+        id TEXT PRIMARY KEY,
+        owner_address TEXT NOT NULL,
+        payment_recipient TEXT NOT NULL,
+        payment_recipient_ens TEXT,
+        name TEXT NOT NULL,
+        description TEXT,
+        upstream_url TEXT NOT NULL,
+        proxy_url TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        network TEXT NOT NULL DEFAULT 'base',
+        currency TEXT NOT NULL DEFAULT 'USDC',
+        price_per_request TEXT NOT NULL DEFAULT '1000000',
+        discoverable INTEGER NOT NULL DEFAULT 1,
+        health_endpoint TEXT,
+        docs_type TEXT,
+        docs_url TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS payment_nonces (
+        id SERIAL PRIMARY KEY,
+        nonce TEXT NOT NULL UNIQUE,
+        user_address TEXT NOT NULL,
+        service_id TEXT NOT NULL,
+        amount TEXT NOT NULL,
+        network TEXT NOT NULL,
+        used_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMP NOT NULL
+      );
+
       -- Create indexes for better query performance
       CREATE INDEX IF NOT EXISTS idx_api_calls_service_id ON api_calls(service_id);
       CREATE INDEX IF NOT EXISTS idx_api_calls_timestamp ON api_calls(timestamp);
@@ -124,14 +156,21 @@ export async function initializeDatabase() {
       
       CREATE INDEX IF NOT EXISTS idx_daily_stats_service_date ON daily_stats(service_id, date);
       CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_stats(date);
+      
+      CREATE INDEX IF NOT EXISTS idx_user_services_owner ON user_services(owner_address);
+      CREATE INDEX IF NOT EXISTS idx_user_services_status ON user_services(status);
+      
+      CREATE INDEX IF NOT EXISTS idx_payment_nonces_nonce ON payment_nonces(nonce);
+      CREATE INDEX IF NOT EXISTS idx_payment_nonces_user ON payment_nonces(user_address);
+      CREATE INDEX IF NOT EXISTS idx_payment_nonces_expires ON payment_nonces(expires_at);
     `;
     
     // Execute the SQL using postgres client
     await client.unsafe(sql);
 
-    console.log('✅ Database initialized successfully');
+    // console.log(' Database initialized successfully');
   } catch (error) {
-    console.error('❌ Error initializing database:', error);
+    console.error(' Error initializing database:', error);
     throw error;
   }
 }
@@ -139,5 +178,5 @@ export async function initializeDatabase() {
 // Close database connection (for cleanup) - not typically needed for serverless/pooled connections
 export function closeDatabase() {
   // For postgres-js, the pool manages connections, no explicit close needed here
-  console.log('Database client is managed by the pool.');
+  // console.log('Database client is managed by the pool.');
 }

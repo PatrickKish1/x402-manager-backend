@@ -54,7 +54,7 @@ export class DiscoveryService {
     const url = `${CDP_BAZAAR_URL}${params.toString() ? '?' + params.toString() : ''}`;
 
     const queueLength = (rateLimiters.cdp as any).queue?.length || 0;
-    console.log(`[Backend] Fetching from CDP: ${url} (queue length: ${queueLength})`);
+    // console.log(`[Backend] Fetching from CDP: ${url} (queue length: ${queueLength})`);
 
     const response = await fetch(url, {
       method: 'GET',

@@ -82,3 +82,37 @@ export const dailyStats = pgTable('daily_stats', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
+
+// User Services (for service management)
+export const userServices = pgTable('user_services', {
+  id: text('id').primaryKey(), // Service ID from x402
+  ownerAddress: text('owner_address').notNull(), // Creator of the service
+  paymentRecipient: text('payment_recipient').notNull(), // Who receives payments (can be different from owner)
+  paymentRecipientEns: text('payment_recipient_ens'), // ENS name for payment recipient (optional)
+  name: text('name').notNull(),
+  description: text('description'),
+  upstreamUrl: text('upstream_url').notNull(),
+  proxyUrl: text('proxy_url').notNull(),
+  status: text('status').notNull().default('active'), // active, inactive, maintenance
+  network: text('network').notNull().default('base'),
+  currency: text('currency').notNull().default('USDC'),
+  pricePerRequest: text('price_per_request').notNull().default('1000000'), // 1 USDC in atomic units (provider sets and keeps 100%)
+  discoverable: integer('discoverable').notNull().default(1), // SQLite boolean (1 = true, 0 = false)
+  healthEndpoint: text('health_endpoint'),
+  docsType: text('docs_type'), // swagger, link, manual
+  docsUrl: text('docs_url'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+// Payment Nonces (for replay attack prevention)
+export const paymentNonces = pgTable('payment_nonces', {
+  id: serial('id').primaryKey(),
+  nonce: text('nonce').notNull().unique(),
+  userAddress: text('user_address').notNull(),
+  serviceId: text('service_id').notNull(),
+  amount: text('amount').notNull(),
+  network: text('network').notNull(),
+  usedAt: timestamp('used_at').notNull().defaultNow(),
+  expiresAt: timestamp('expires_at').notNull(), // For automatic cleanup
+});
