@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-// Initialize Supabase client
-const supabase = createClient(supabaseUrl, supabaseKey);
-
+/**
+ * Proxy transactions from x402scan TRPC API
+ * X402scan has the actual blockchain transaction data from indexers
+ */
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -16,51 +13,83 @@ export async function GET(request: NextRequest) {
     const userAddress = searchParams.get('userAddress');
     const chain = searchParams.get('chain');
     
-    // Build query
-    let query = supabase
-      .from('x402_transactions')
-      .select('*', { count: 'exact' })
-      .order('block_timestamp', { ascending: false });
+    // X402scan TRPC API endpoint
+    const x402scanUrl = process.env.X402SCAN_URL || 'https://x402.arvos.xyz';
+    const trpcEndpoint = `${x402scanUrl}/api/trpc/public.transfers.list`;
+    
+    // Build TRPC query params
+    const input: any = {
+      pagination: {
+        page_size: pageSize,
+        page,
+      },
+      sorting: {
+        id: 'block_timestamp',
+        desc: true,
+      },
+    };
 
     // Apply filters
-    if (resourceFilter) {
-      query = query.eq('resource', resourceFilter);
+    if (userAddress) {
+      input.facilitatorIds = [userAddress.toLowerCase()];
     }
     
-    if (userAddress) {
-      query = query.eq('recipient', userAddress.toLowerCase());
-    }
-
     if (chain) {
-      query = query.eq('chain', chain);
+      input.chains = [chain];
     }
 
-    // Pagination
-    const from = page * pageSize;
-    const to = from + pageSize - 1;
-    query = query.range(from, to);
+    // TRPC uses batch format
+    const trpcBatch = {
+      0: {
+        json: input,
+      },
+    };
 
-    const { data, error, count } = await query;
+    const url = `${trpcEndpoint}?batch=1&input=${encodeURIComponent(JSON.stringify(trpcBatch))}`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
 
-    if (error) {
-      console.error('[Transactions API] Database error:', error);
-      // Never expose database errors to frontend
+    if (!response.ok) {
+      console.error('[Transactions API] X402scan error:', response.status, response.statusText);
       return NextResponse.json(
-        { success: false, error: 'Failed to fetch transactions. Please try again.' },
+        { success: false, error: 'Failed to fetch transactions from x402scan.' },
         { status: 500 }
       );
     }
 
-    const totalPages = count ? Math.ceil(count / pageSize) : 0;
-    const hasNextPage = page < totalPages - 1;
+    const data = await response.json();
+    const result = data[0]?.result?.data?.json;
+
+    if (!result) {
+      return NextResponse.json({
+        items: [],
+        total_count: 0,
+        total_pages: 0,
+        current_page: page,
+        page_size: pageSize,
+        hasNextPage: false,
+      });
+    }
+
+    // Filter by resource if specified (client-side filter since TRPC doesn't support this)
+    let items = result.items || [];
+    if (resourceFilter) {
+      items = items.filter((item: any) => 
+        item.resource && item.resource.toLowerCase().includes(resourceFilter.toLowerCase())
+      );
+    }
 
     return NextResponse.json({
-      items: data || [],
-      total_count: count || 0,
-      total_pages: totalPages,
+      items,
+      total_count: result.total_count || 0,
+      total_pages: result.total_pages || 0,
       current_page: page,
       page_size: pageSize,
-      hasNextPage,
+      hasNextPage: result.hasNextPage || false,
     });
   } catch (error) {
     console.error('[Transactions API] Error:', error);

@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-const supabase = createClient(supabaseUrl, supabaseKey);
-
+/**
+ * Get transaction count from x402scan
+ */
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -19,31 +16,48 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    let query = supabase
-      .from('x402_transactions')
-      .select('*', { count: 'exact', head: true });
-
-    if (resource) {
-      query = query.eq('resource', resource);
-    }
+    // Fetch from transactions list endpoint (x402scan doesn't have dedicated count endpoint)
+    const x402scanUrl = process.env.X402SCAN_URL || 'https://x402.arvos.xyz';
+    const trpcEndpoint = `${x402scanUrl}/api/trpc/public.transfers.list`;
+    
+    const input: any = {
+      pagination: {
+        page_size: 1, // We only need the count
+        page: 0,
+      },
+      sorting: {
+        id: 'block_timestamp',
+        desc: true,
+      },
+    };
 
     if (userAddress) {
-      query = query.eq('recipient', userAddress.toLowerCase());
+      input.facilitatorIds = [userAddress.toLowerCase()];
     }
 
-    const { count, error } = await query;
+    const trpcBatch = {
+      0: {
+        json: input,
+      },
+    };
 
-    if (error) {
-      console.error('[Transaction Count API] Database error:', error);
-      // Never expose database errors to frontend
+    const url = `${trpcEndpoint}?batch=1&input=${encodeURIComponent(JSON.stringify(trpcBatch))}`;
+    
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      console.error('[Transaction Count API] X402scan error:', response.status);
       return NextResponse.json(
         { success: false, error: 'Unable to retrieve transaction count. Please try again.' },
         { status: 500 }
       );
     }
 
+    const data = await response.json();
+    const result = data[0]?.result?.data?.json;
+
     return NextResponse.json({
-      count: count || 0,
+      count: result?.total_count || 0,
       resource,
       userAddress,
     });

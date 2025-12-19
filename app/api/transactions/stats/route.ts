@@ -1,57 +1,76 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-const supabase = createClient(supabaseUrl, supabaseKey);
-
+/**
+ * Get transaction statistics from x402scan
+ */
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const userAddress = searchParams.get('userAddress');
     const resource = searchParams.get('resource');
     
-    // Build base query
-    let query = supabase
-      .from('x402_transactions')
-      .select('amount, sender, chain');
+    // Fetch all transactions for stats calculation (limit to reasonable number)
+    const x402scanUrl = process.env.X402SCAN_URL || 'https://x402.arvos.xyz';
+    const trpcEndpoint = `${x402scanUrl}/api/trpc/public.transfers.list`;
+    
+    const input: any = {
+      pagination: {
+        page_size: 1000, // Fetch more for accurate stats
+        page: 0,
+      },
+      sorting: {
+        id: 'block_timestamp',
+        desc: true,
+      },
+    };
 
     if (userAddress) {
-      query = query.eq('recipient', userAddress.toLowerCase());
+      input.facilitatorIds = [userAddress.toLowerCase()];
     }
 
-    if (resource) {
-      query = query.eq('resource', resource);
-    }
+    const trpcBatch = {
+      0: {
+        json: input,
+      },
+    };
 
-    const { data, error } = await query;
+    const url = `${trpcEndpoint}?batch=1&input=${encodeURIComponent(JSON.stringify(trpcBatch))}`;
+    
+    const response = await fetch(url);
 
-    if (error) {
-      console.error('[Transaction Stats API] Database error:', error);
-      // Never expose database errors to frontend
+    if (!response.ok) {
+      console.error('[Transaction Stats API] X402scan error:', response.status);
       return NextResponse.json(
         { success: false, error: 'Unable to retrieve transaction statistics. Please try again.' },
         { status: 500 }
       );
     }
 
-    // Calculate stats
-    const transactions = data || [];
-    const totalTransactions = transactions.length;
+    const data = await response.json();
+    const result = data[0]?.result?.data?.json;
+    const transactions = result?.items || [];
+
+    // Filter by resource if specified
+    const filteredTransactions = resource
+      ? transactions.filter((tx: any) => 
+          tx.resource && tx.resource.toLowerCase().includes(resource.toLowerCase())
+        )
+      : transactions;
+
+    const totalTransactions = result?.total_count || filteredTransactions.length;
     
-    // Calculate total volume (sum of amounts)
-    const totalVolume = transactions.reduce((sum, tx) => {
-      const amount = parseFloat(tx.amount) || 0;
+    // Calculate total volume (sum of amounts in USDC, amount is in atomic units)
+    const totalVolume = filteredTransactions.reduce((sum: number, tx: any) => {
+      const amount = parseFloat(tx.amount) / 1000000 || 0; // Convert from atomic units to USDC
       return sum + amount;
     }, 0);
 
     // Count unique clients (unique senders)
-    const uniqueClients = new Set(transactions.map(tx => tx.sender)).size;
+    const uniqueClients = new Set(filteredTransactions.map((tx: any) => tx.sender)).size;
 
     // Count by chain
     const chainCounts: Record<string, number> = {};
-    transactions.forEach(tx => {
+    filteredTransactions.forEach((tx: any) => {
       const chain = tx.chain || 'unknown';
       chainCounts[chain] = (chainCounts[chain] || 0) + 1;
     });
