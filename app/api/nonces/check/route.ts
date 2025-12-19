@@ -42,9 +42,10 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('[Nonces] Error checking nonce:', error);
+    // Never expose internal errors to frontend
     return NextResponse.json({
-      error: 'Failed to check nonce',
-      message: error instanceof Error ? error.message : 'Unknown error'
+      success: false,
+      error: 'Unable to verify payment. Please try again.'
     }, { status: 500 });
   }
 }

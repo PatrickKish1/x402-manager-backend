@@ -59,8 +59,9 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     console.error('Error in analytics tracking:', error);
+    // Never expose internal errors to frontend
     return NextResponse.json(
-      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { success: false, error: 'Unable to record analytics. Your request was still processed.' },
       { 
         status: 500,
         headers: {

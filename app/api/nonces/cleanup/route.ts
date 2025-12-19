@@ -51,9 +51,10 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('[Nonces] Cleanup error:', error);
+    // Never expose internal errors to frontend (this is typically a cron job)
     return NextResponse.json({
-      error: 'Cleanup failed',
-      message: error instanceof Error ? error.message : 'Unknown error'
+      success: false,
+      error: 'Cleanup task failed. Check logs for details.'
     }, { status: 500 });
   }
 }

@@ -10,7 +10,7 @@ const connectionString = process.env.DATABASE_URL || process.env.SUPABASE_DATABA
 
 // Only throw error if we're not in build mode (Next.js build doesn't need DB connection)
 if (!connectionString && process.env.NODE_ENV !== 'production' && !process.env.NEXT_PHASE) {
-  console.warn('⚠️  DATABASE_URL or SUPABASE_DATABASE_URL not set. Database features will be unavailable.');
+  console.warn(' DATABASE_URL or SUPABASE_DATABASE_URL not set. Database features will be unavailable.');
 }
 
 // Create postgres client (only if connection string is available)
@@ -24,7 +24,7 @@ export const db = client ? drizzle(client, { schema }) : null as any;
 // Initialize database tables
 export async function initializeDatabase() {
   if (!client || !connectionString) {
-    console.warn('⚠️  Database connection not available. Skipping initialization.');
+    console.warn(' Database connection not available. Skipping initialization.');
     return;
   }
   
@@ -122,6 +122,11 @@ export async function initializeDatabase() {
         network TEXT NOT NULL DEFAULT 'base',
         currency TEXT NOT NULL DEFAULT 'USDC',
         price_per_request TEXT NOT NULL DEFAULT '1000000',
+        token_address TEXT,
+        token_decimals INTEGER DEFAULT 6,
+        token_name TEXT,
+        token_version TEXT DEFAULT '2',
+        token_symbol TEXT,
         discoverable INTEGER NOT NULL DEFAULT 1,
         health_endpoint TEXT,
         docs_type TEXT,

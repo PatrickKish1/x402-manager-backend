@@ -96,6 +96,12 @@ export async function POST(request: NextRequest) {
       network: service.network || 'base',
       currency: service.currency || 'USDC',
       pricePerRequest: pricePerRequest,
+      // Token configuration (for custom ERC-20 tokens)
+      tokenAddress: service.tokenAddress || null,
+      tokenDecimals: service.tokenDecimals || 6,
+      tokenName: service.tokenName || null,
+      tokenVersion: service.tokenVersion || '2',
+      tokenSymbol: service.tokenSymbol || null,
       discoverable: service.discoverable ? 1 : 0,
       healthEndpoint: service.healthEndpoint || null,
       docsType: service.docsType || null,
@@ -116,8 +122,9 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('Error saving user service:', error);
+    // Never expose internal errors to frontend
     return NextResponse.json(
-      { error: 'Failed to save service', details: error.message },
+      { success: false, error: 'Unable to create service. Please check your input and try again.' },
       { status: 500 }
     );
   }
@@ -163,8 +170,9 @@ export async function GET(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('Error fetching user services:', error);
+    // Never expose internal errors to frontend
     return NextResponse.json(
-      { error: 'Failed to fetch services', details: error.message },
+      { success: false, error: 'Unable to retrieve services. Please try again later.' },
       { status: 500 }
     );
   }

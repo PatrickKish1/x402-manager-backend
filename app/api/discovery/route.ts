@@ -56,8 +56,9 @@ export async function GET(request: NextRequest) {
     );
   } catch (error) {
     console.error('Error fetching discovery services:', error);
+    // Never expose internal errors to frontend
     return NextResponse.json(
-      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { success: false, error: 'Unable to load services. Please try again later.' },
       { 
         status: 500,
         headers: {

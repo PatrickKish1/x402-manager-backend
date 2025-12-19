@@ -649,9 +649,10 @@ async function handleGatewayRequest(request: NextRequest, params: { path: string
 
   } catch (error) {
     console.error('[Gateway] Error:', error);
+    // Never expose internal errors to frontend
     return NextResponse.json({
-      error: 'Gateway error occurred',
-      message: error instanceof Error ? error.message : 'Unknown error'
+      success: false,
+      error: 'Gateway temporarily unavailable. Please try again in a moment.'
     }, { status: 500 });
   }
 }

@@ -96,7 +96,15 @@ export const userServices = pgTable('user_services', {
   status: text('status').notNull().default('active'), // active, inactive, maintenance
   network: text('network').notNull().default('base'),
   currency: text('currency').notNull().default('USDC'),
-  pricePerRequest: text('price_per_request').notNull().default('1000000'), // 1 USDC in atomic units (provider sets and keeps 100%)
+  pricePerRequest: text('price_per_request').notNull().default('1000000'), // Amount in atomic units (provider sets and keeps 100%)
+  
+  // Token Configuration (for custom ERC-20 tokens)
+  tokenAddress: text('token_address'), // Custom token contract address (optional, uses default if not set)
+  tokenDecimals: integer('token_decimals').default(6), // Token decimals (default: 6 for USDC)
+  tokenName: text('token_name'), // Token name for EIP-712 (e.g., "USD Coin", "Wrapped ETH")
+  tokenVersion: text('token_version').default('2'), // EIP-712 version (default: "2")
+  tokenSymbol: text('token_symbol'), // Token symbol for display (e.g., "USDC", "WETH")
+  
   discoverable: integer('discoverable').notNull().default(1), // SQLite boolean (1 = true, 0 = false)
   healthEndpoint: text('health_endpoint'),
   docsType: text('docs_type'), // swagger, link, manual

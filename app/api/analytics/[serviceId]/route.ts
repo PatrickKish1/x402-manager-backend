@@ -64,8 +64,9 @@ export async function GET(
     });
   } catch (error) {
     console.error('Error fetching analytics:', error);
+    // Never expose internal errors to frontend
     return NextResponse.json(
-      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { success: false, error: 'Unable to retrieve analytics. Please try again later.' },
       { 
         status: 500,
         headers: {

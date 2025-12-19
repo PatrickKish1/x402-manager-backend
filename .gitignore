@@ -38,3 +38,9 @@ next-env.d.ts
 *.db
 *.db-shm
 *.db-wal
+
+# SQL Migration Files (ignored per user request)
+# NOTE: Typically these SHOULD be committed for version control
+# Remove these lines if you want to track database schema in git
+supabase/migrations/*.sql
+*.sql

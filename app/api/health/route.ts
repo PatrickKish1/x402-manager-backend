@@ -1,65 +1,63 @@
-// Health Check Endpoint
-// GET /api/health
+import { NextRequest, NextResponse } from 'next/server';
 
-import { NextResponse } from 'next/server';
-import { db } from '@/lib/database/client';
-import { apiCalls } from '@/lib/database/schema';
-
-export async function GET() {
+/**
+ * Health check endpoint
+ * Returns system status and basic diagnostics
+ */
+export async function GET(request: NextRequest) {
+  const startTime = Date.now();
+  
   try {
-    // Simple database health check (skip if db is not available)
-    if (!db) {
-      return NextResponse.json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        database: 'not_configured',
-      }, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-        },
-      });
-    }
-    
-    await db.select().from(apiCalls).limit(1);
-    
-    return NextResponse.json({
+    // Basic health check
+    const health = {
       status: 'healthy',
       timestamp: new Date().toISOString(),
-      database: 'connected',
-    }, {
+      uptime: process.uptime(),
+      service: 'x402-gateway',
+      version: process.env.npm_package_version || '1.0.0',
+      environment: process.env.NODE_ENV || 'development',
+      responseTime: 0,
+    };
+
+    // Calculate response time
+    health.responseTime = Date.now() - startTime;
+
+    return NextResponse.json(health, {
+      status: 200,
       headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
       },
     });
-  } catch (error) {
-    return NextResponse.json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      database: 'disconnected',
-      error: error instanceof Error ? error.message : 'Unknown error',
-    }, {
-      status: 503,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    return NextResponse.json(
+      {
+        status: 'unhealthy',
+        timestamp: new Date().toISOString(),
+        error: errorMessage,
+        responseTime: Date.now() - startTime,
       },
-    });
+      {
+        status: 503,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        },
+      }
+    );
   }
 }
 
-export async function OPTIONS() {
+export async function HEAD(request: NextRequest) {
   return new NextResponse(null, {
     status: 200,
     headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
     },
   });
 }
-

@@ -41,8 +41,9 @@ export async function DELETE(
     });
   } catch (error: any) {
     console.error('Error deleting user service:', error);
+    // Never expose internal errors to frontend
     return NextResponse.json(
-      { error: 'Failed to delete service', details: error.message },
+      { success: false, error: 'Unable to delete service. Please try again later.' },
       { status: 500 }
     );
   }
@@ -115,8 +116,9 @@ export async function PUT(
     });
   } catch (error: any) {
     console.error('Error updating user service:', error);
+    // Never expose internal errors to frontend
     return NextResponse.json(
-      { error: 'Failed to update service', details: error.message },
+      { success: false, error: 'Unable to update service. Please try again later.' },
       { status: 500 }
     );
   }
