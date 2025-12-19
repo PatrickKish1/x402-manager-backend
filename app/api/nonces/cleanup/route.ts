@@ -8,13 +8,16 @@ import { sql } from 'drizzle-orm';
  * Cleanup expired nonces (run as a cron job)
  * GET /api/nonces/cleanup
  * 
- * Add to Vercel Cron Jobs:
+ * Add to Vercel Cron Jobs (vercel.json):
  * {
  *   "crons": [{
  *     "path": "/api/nonces/cleanup",
- *     "schedule": "0 * * * *"
+ *     "schedule": "0 0 * * *"  // Daily at midnight UTC (Hobby plan compatible)
  *   }]
  * }
+ * 
+ * Note: Vercel Hobby plans only support daily cron jobs.
+ * For more frequent cleanup, upgrade to Pro plan.
  */
 export async function GET(request: NextRequest) {
   try {

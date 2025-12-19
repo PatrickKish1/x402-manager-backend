@@ -2,7 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   // API-only backend - no static pages
-  output: 'standalone',
+  // Only use standalone in production (Vercel) to avoid Windows symlink issues in dev
+  output: process.env.NODE_ENV === 'production' ? 'standalone' : undefined,
   
   // Optimize for API routes
   experimental: {
