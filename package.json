@@ -10,15 +10,18 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.10",
+    "ajv": "^8.17.1",
     "date-fns": "^4.1.0",
     "drizzle-kit": "^0.30.0",
     "drizzle-orm": "^0.45.1",
     "next": "16.0.10",
+    "node-cron": "^3.0.3",
     "postgres": "^3.4.7",
     "viem": "^2.43.1"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/node-cron": "^3.0.11",
     "@types/react": "19.2.7",
     "eslint": "^9",
     "eslint-config-next": "16.0.10",

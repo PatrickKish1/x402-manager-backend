@@ -124,3 +124,133 @@ export const paymentNonces = pgTable('payment_nonces', {
   usedAt: timestamp('used_at').notNull().defaultNow(),
   expiresAt: timestamp('expires_at').notNull(), // For automatic cleanup
 });
+
+// Service Endpoints (with endpoint-level pricing and configuration)
+export const serviceEndpoints = pgTable('service_endpoints', {
+  id: serial('id').primaryKey(),
+  serviceId: text('service_id').notNull(),
+  endpoint: text('endpoint').notNull(), // e.g., '/users/{id}' or '/users'
+  method: text('method').notNull().default('GET'), // GET, POST, PUT, DELETE, PATCH
+  description: text('description'),
+  
+  // Endpoint-level pricing configuration
+  pricePerRequest: text('price_per_request'), // Amount in atomic units (null = use service default)
+  network: text('network'), // null = use service default
+  currency: text('currency'), // null = use service default
+  tokenAddress: text('token_address'), // null = use service default
+  tokenDecimals: integer('token_decimals'), // null = use service default
+  tokenName: text('token_name'), // null = use service default
+  tokenVersion: text('token_version'), // null = use service default
+  tokenSymbol: text('token_symbol'), // null = use service default
+  
+  // Request configuration
+  requiresAuth: integer('requires_auth').default(0), // 0 = false, 1 = true
+  headers: text('headers'), // JSON string of default headers
+  queryParams: text('query_params'), // JSON string of query param definitions
+  pathParams: text('path_params'), // JSON string of path param definitions (e.g., {id: 'string'})
+  requestBody: text('request_body'), // JSON string of request body schema
+  
+  // Response configuration
+  outputSchema: text('output_schema'), // JSON string of expected output schema
+  expectedStatusCode: integer('expected_status_code').default(200),
+  
+  // x402 extra object (for chain ID and multi-chain support)
+  extra: text('extra'), // JSON string with chainId, chainName, supportedChains, etc.
+  
+  // Testing
+  lastTestedAt: timestamp('last_tested_at'),
+  lastTestResponse: text('last_test_response'), // JSON string of last test response
+  lastTestStatus: integer('last_test_status'), // HTTP status code from last test
+  lastTestError: text('last_test_error'),
+  
+  // Ordering
+  orderIndex: integer('order_index').default(0),
+  
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+// ============================================================================
+// VALIDATOR SYSTEM TABLES
+// ============================================================================
+
+// Validated Services Registry
+// Validation Votes (one per user per service - allows multiple users to validate)
+export const validationVotes = pgTable('validation_votes', {
+  id: serial('id').primaryKey(),
+  serviceId: text('service_id').notNull(),
+  userAddress: text('user_address').notNull(),
+  vote: text('vote').notNull(), // 'valid' or 'invalid'
+  reason: text('reason'), // Reason for invalid vote (error message, missing keys, etc.)
+  validationDetails: text('validation_details'), // JSON string with full validation results
+  testResponse: text('test_response'), // JSON string of the test response
+  validationMode: text('validation_mode'), // 'free' or 'user-paid'
+  testnetChain: text('testnet_chain'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export const validatedServices = pgTable('validated_services', {
+  id: serial('id').primaryKey(),
+  serviceId: text('service_id').notNull().unique(),
+  serviceName: text('service_name').notNull(),
+  validationStatus: text('validation_status').notNull(), // 'pending', 'verified', 'failed', 'disputed'
+  validationScore: integer('validation_score'), // 0-100 (aggregated from votes)
+  lastValidatedAt: timestamp('last_validated_at'),
+  validVoteCount: integer('valid_vote_count').notNull().default(0), // Number of users who marked as valid
+  invalidVoteCount: integer('invalid_vote_count').notNull().default(0), // Number of users who marked as invalid
+  testnetChain: text('testnet_chain'), // 'base-sepolia', 'solana-devnet'
+  lastValidatedByAddress: text('last_validated_by_address'), // Most recent validator
+  validationMode: text('validation_mode'), // 'free', 'user-paid'
+  validationResults: text('validation_results'), // JSON string (aggregated)
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+// Validation Requests (for abuse prevention tracking)
+export const validationRequests = pgTable('validation_requests', {
+  id: serial('id').primaryKey(),
+  serviceId: text('service_id').notNull(),
+  requestedByAddress: text('requested_by_address').notNull(),
+  requestedByIp: text('requested_by_ip'),
+  validationMode: text('validation_mode').notNull(), // 'free', 'user-paid'
+  status: text('status').notNull(), // 'pending', 'completed', 'failed'
+  testnetChain: text('testnet_chain').notNull(),
+  tokensSpent: bigint('tokens_spent', { mode: 'number' }),
+  validationResults: text('validation_results'), // JSON string
+  errorMessage: text('error_message'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+// Validation Test Cases (detailed test results)
+export const validationTestCases = pgTable('validation_test_cases', {
+  id: serial('id').primaryKey(),
+  validationRequestId: integer('validation_request_id').notNull(),
+  serviceId: text('service_id').notNull(),
+  endpoint: text('endpoint').notNull(),
+  method: text('method').notNull(),
+  testInput: text('test_input'), // JSON string
+  expectedOutputSchema: text('expected_output_schema'), // JSON string
+  actualOutput: text('actual_output'), // JSON string
+  passed: integer('passed').notNull(), // 0 or 1 (boolean)
+  errorMessage: text('error_message'),
+  responseTime: integer('response_time'),
+  statusCode: integer('status_code'),
+  schemaValid: integer('schema_valid'), // 0 or 1
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+// Blockchain Transactions Cache (for native x402 APIs)
+export const blockchainTransactionsCache = pgTable('blockchain_transactions_cache', {
+  id: serial('id').primaryKey(),
+  serviceId: text('service_id').notNull(),
+  chain: text('chain').notNull(),
+  txHash: text('tx_hash').notNull(),
+  sender: text('sender').notNull(),
+  recipient: text('recipient').notNull(),
+  amount: bigint('amount', { mode: 'number' }).notNull(),
+  amountFormatted: real('amount_formatted').notNull(),
+  token: text('token').notNull(),
+  blockTimestamp: timestamp('block_timestamp').notNull(),
+  cachedAt: timestamp('cached_at').notNull().defaultNow(),
+});
