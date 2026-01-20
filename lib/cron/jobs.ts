@@ -1,6 +1,6 @@
 // Cron Jobs - Scheduled tasks for the validator system
 import cron from 'node-cron';
-import { db } from '../database/client';
+import { db, client } from '../database/client';
 import { userServices } from '../database/schema';
 import { eq } from 'drizzle-orm';
 import { refreshServiceTransactionCache } from '../blockchain/indexer';
@@ -74,7 +74,7 @@ async function refreshAllServiceTransactions() {
  * Clean up old records from database
  */
 async function cleanupOldRecords() {
-  if (!db) {
+  if (!db || !client) {
     console.error('[Cron] Database not available');
     return;
   }
@@ -83,36 +83,30 @@ async function cleanupOldRecords() {
     // Delete validation requests older than 90 days
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
-    const result = await db.execute(
-      db.sql`
-        DELETE FROM validation_requests 
-        WHERE created_at < ${ninetyDaysAgo}
-      `
-    );
+    const result = await client`
+      DELETE FROM validation_requests 
+      WHERE created_at < ${ninetyDaysAgo}
+    `;
 
-    console.log(`[Cron] Deleted ${result.rowCount} old validation requests`);
+    console.log(`[Cron] Deleted ${result.count || 0} old validation requests`);
 
     // Delete validation test cases older than 90 days
-    const result2 = await db.execute(
-      db.sql`
-        DELETE FROM validation_test_cases 
-        WHERE created_at < ${ninetyDaysAgo}
-      `
-    );
+    const result2 = await client`
+      DELETE FROM validation_test_cases 
+      WHERE created_at < ${ninetyDaysAgo}
+    `;
 
-    console.log(`[Cron] Deleted ${result2.rowCount} old validation test cases`);
+    console.log(`[Cron] Deleted ${result2.count || 0} old validation test cases`);
 
     // Delete cached blockchain transactions older than 180 days
     const oneEightyDaysAgo = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
 
-    const result3 = await db.execute(
-      db.sql`
-        DELETE FROM blockchain_transactions_cache 
-        WHERE cached_at < ${oneEightyDaysAgo}
-      `
-    );
+    const result3 = await client`
+      DELETE FROM blockchain_transactions_cache 
+      WHERE cached_at < ${oneEightyDaysAgo}
+    `;
 
-    console.log(`[Cron] Deleted ${result3.rowCount} old cached transactions`);
+    console.log(`[Cron] Deleted ${result3.count || 0} old cached transactions`);
 
     console.log('[Cron] Database cleanup complete');
   } catch (error) {

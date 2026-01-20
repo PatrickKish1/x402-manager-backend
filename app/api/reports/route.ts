@@ -10,6 +10,16 @@ import { eq, or, and, desc } from 'drizzle-orm';
  */
 export async function GET(request: NextRequest) {
   try {
+    if (!db) {
+      return NextResponse.json(
+        { error: 'Database not available' },
+        { status: 503 }
+      );
+    }
+
+    // Store db in const so TypeScript knows it's not null in callbacks
+    const database = db;
+
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status'); // 'failed', 'disputed', or all
     const limit = parseInt(searchParams.get('limit') || '50');
@@ -28,7 +38,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get services with validation issues
-    const services = await db
+    const services = await database
       .select()
       .from(validatedServices)
       .where(whereCondition)
@@ -40,7 +50,7 @@ export async function GET(request: NextRequest) {
     const servicesWithVotes = await Promise.all(
       services.map(async (service: any) => {
         // Get all invalid votes with reasons
-        const invalidVotes = await db
+        const invalidVotes = await database
           .select()
           .from(validationVotes)
           .where(
@@ -52,7 +62,7 @@ export async function GET(request: NextRequest) {
           .orderBy(desc(validationVotes.createdAt));
 
         // Get recent valid votes count
-        const validVotes = await db
+        const validVotes = await database
           .select()
           .from(validationVotes)
           .where(

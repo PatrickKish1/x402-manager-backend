@@ -1,33 +1,88 @@
 // Database Client Setup
-// Using Supabase (PostgreSQL) with Drizzle ORM
+// Using Supabase with Drizzle ORM via Supabase SSR
 
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema';
+import { createSupabaseAdminClient } from '../supabase/server';
 
-// Get Supabase connection string from environment
-const connectionString = process.env.DATABASE_URL || process.env.SUPABASE_DATABASE_URL;
+// Get Supabase connection from environment
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Only throw error if we're not in build mode (Next.js build doesn't need DB connection)
-if (!connectionString && process.env.NODE_ENV !== 'production' && !process.env.NEXT_PHASE) {
-  console.warn(' DATABASE_URL or SUPABASE_DATABASE_URL not set. Database features will be unavailable.');
+// Create postgres connection from Supabase client
+// We'll use the Supabase client's connection internally
+let client: postgres.Sql | null = null;
+let db: ReturnType<typeof drizzle> | null = null;
+
+// Initialize database connection using Supabase
+export async function initializeDatabaseConnection() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    console.warn('Supabase environment variables not set. Database features will be unavailable.');
+    return;
+  }
+
+  try {
+    // Create Supabase admin client to get connection string
+    const supabase = createSupabaseAdminClient();
+    
+    // Extract connection details from Supabase URL
+    // Supabase URL format: https://[project-ref].supabase.co
+    // We need to construct the PostgreSQL connection string
+    const projectRef = supabaseUrl.replace('https://', '').replace('.supabase.co', '');
+    
+    // Get database password from environment or use service role key
+    // For Supabase, we can use the connection pooling URL
+    const connectionString = process.env.SUPABASE_DB_PASSWORD
+      ? `postgresql://postgres.${projectRef}:${encodeURIComponent(process.env.SUPABASE_DB_PASSWORD)}@aws-0-${projectRef.split('.')[0]}.pooler.supabase.com:6543/postgres`
+      : process.env.DATABASE_URL; // Fallback to DATABASE_URL if provided
+
+    if (!connectionString) {
+      console.warn('No database connection string available. Using Supabase client directly.');
+      return;
+    }
+
+    // Create postgres client
+    client = postgres(connectionString, {
+      max: 10,
+      idle_timeout: 20,
+      connect_timeout: 10,
+    });
+
+    // Create Drizzle instance
+    db = drizzle(client, { schema });
+
+    // Test connection
+    await client`SELECT 1`;
+    
+    console.log('Database connection initialized');
+  } catch (error: any) {
+    console.error('Error initializing database connection:', error.message);
+    client = null;
+    db = null;
+  }
 }
 
-// Create postgres client (only if connection string is available)
-const client = connectionString ? postgres(connectionString, {
-  max: 10, // Maximum number of connections
-}) : null as any;
+// Initialize on module load (for server-side)
+if (typeof window === 'undefined') {
+  initializeDatabaseConnection().catch(console.error);
+}
 
-// Create Drizzle instance (only if client exists)
-export const db = client ? drizzle(client, { schema }) : null as any;
+// Export db and client (will be null if not initialized)
+export { db, client };
 
 // Initialize database tables
 export async function initializeDatabase() {
-  if (!client || !connectionString) {
-    console.warn(' Database connection not available. Skipping initialization.');
-    return;
+  if (!db || !client) {
+    await initializeDatabaseConnection();
   }
-  
+
+  if (!db || !client) {
+    const error = new Error('Database connection not available');
+    (error as any).code = 'DATABASE_NOT_AVAILABLE';
+    throw error;
+  }
+
   try {
     // Create tables if they don't exist using raw SQL
     const sql = `
@@ -146,6 +201,26 @@ export async function initializeDatabase() {
         expires_at TIMESTAMP NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS discovered_services (
+        id SERIAL PRIMARY KEY,
+        service_id TEXT NOT NULL UNIQUE,
+        resource TEXT NOT NULL UNIQUE,
+        type TEXT,
+        x402_version INTEGER NOT NULL DEFAULT 1,
+        last_updated TIMESTAMP,
+        metadata TEXT,
+        accepts TEXT,
+        description TEXT,
+        name TEXT,
+        tags TEXT,
+        network TEXT,
+        price TEXT,
+        output_schema TEXT,
+        synced_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+
       -- Create indexes for better query performance
       CREATE INDEX IF NOT EXISTS idx_api_calls_service_id ON api_calls(service_id);
       CREATE INDEX IF NOT EXISTS idx_api_calls_timestamp ON api_calls(timestamp);
@@ -168,20 +243,26 @@ export async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_payment_nonces_nonce ON payment_nonces(nonce);
       CREATE INDEX IF NOT EXISTS idx_payment_nonces_user ON payment_nonces(user_address);
       CREATE INDEX IF NOT EXISTS idx_payment_nonces_expires ON payment_nonces(expires_at);
-    `;
-    
-    // Execute the SQL using postgres client
-    await client.unsafe(sql);
 
-    // console.log(' Database initialized successfully');
-  } catch (error) {
-    console.error(' Error initializing database:', error);
+      CREATE INDEX IF NOT EXISTS idx_discovered_services_resource ON discovered_services(resource);
+      CREATE INDEX IF NOT EXISTS idx_discovered_services_type ON discovered_services(type);
+      CREATE INDEX IF NOT EXISTS idx_discovered_services_network ON discovered_services(network);
+      CREATE INDEX IF NOT EXISTS idx_discovered_services_synced_at ON discovered_services(synced_at);
+    `;
+
+    await client.unsafe(sql);
+    console.log('Database tables initialized');
+  } catch (error: any) {
+    console.error('Error initializing database:', error);
     throw error;
   }
 }
 
-// Close database connection (for cleanup) - not typically needed for serverless/pooled connections
+// Close database connection (for cleanup)
 export function closeDatabase() {
-  // For postgres-js, the pool manages connections, no explicit close needed here
-  // console.log('Database client is managed by the pool.');
+  if (client) {
+    client.end();
+    client = null;
+    db = null;
+  }
 }

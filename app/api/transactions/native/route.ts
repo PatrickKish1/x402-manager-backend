@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchServiceTransactions, getCachedTransactions, refreshServiceTransactionCache } from '@/lib/blockchain/indexer';
 import { db } from '@/lib/database/client';
-import { userServices } from '@/lib/database/schema';
-import { eq } from 'drizzle-orm';
+import { userServices, blockchainTransactionsCache } from '@/lib/database/schema';
+import { eq, count } from 'drizzle-orm';
 
 /**
  * GET /api/transactions/native?serviceId=xxx&refresh=true
@@ -16,6 +16,9 @@ export async function GET(request: NextRequest) {
         { status: 503 }
       );
     }
+
+    // Store db in const so TypeScript knows it's not null
+    const database = db;
 
     const { searchParams } = new URL(request.url);
     const serviceId = searchParams.get('serviceId');
@@ -31,7 +34,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch service details
-    const services = await db
+    const services = await database
       .select()
       .from(userServices)
       .where(eq(userServices.id, serviceId))
@@ -62,9 +65,10 @@ export async function GET(request: NextRequest) {
     const transactions = await getCachedTransactions(serviceId, limit, offset);
 
     // Get total count
-    const totalResult = await db.select({ count: db.sql`count(*)` })
-      .from(require('@/lib/database/schema').blockchainTransactionsCache)
-      .where(eq(require('@/lib/database/schema').blockchainTransactionsCache.serviceId, serviceId));
+    const totalResult = await database
+      .select({ count: count() })
+      .from(blockchainTransactionsCache)
+      .where(eq(blockchainTransactionsCache.serviceId, serviceId));
 
     const total = Number(totalResult[0]?.count || 0);
 

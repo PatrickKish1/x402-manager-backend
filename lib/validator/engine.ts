@@ -4,6 +4,8 @@ import { db } from '../database/client';
 import { validationRequests, validationTestCases, validatedServices } from '../database/schema';
 import { eq, sql } from 'drizzle-orm';
 import { signX402Payment } from './x402-payment-signer';
+import { createSupabaseAdminClient } from '../supabase/server';
+import { inferSchemaFromResponse, getBestSchema } from '../services/schema-inference';
 
 const ajv = new Ajv({ allErrors: true, verbose: true });
 
@@ -62,17 +64,20 @@ export async function validateService(request: ValidationRequest): Promise<Valid
   }
 
   // 2. Create validation request record
+  // Ensure testnetChain is not null (required by schema)
+  const finalTestnetChain = testnetChain || 'mainnet';
+  
   const [validationRecord] = await db
     .insert(validationRequests)
     .values({
       serviceId: request.serviceId,
       requestedByAddress: request.userAddress,
-      requestedByIp: request.ipAddress || null,
+      requestedByIp: request.ipAddress || undefined,
       validationMode: request.validationMode,
       status: 'pending',
-      testnetChain: testnetChain || null,
+      testnetChain: finalTestnetChain,
       tokensSpent: 0,
-      validationResults: null,
+      validationResults: undefined,
     })
     .returning();
 
@@ -107,11 +112,11 @@ export async function validateService(request: ValidationRequest): Promise<Valid
         serviceId: request.serviceId,
         endpoint: testCase.endpoint,
         method: testCase.method,
-        testInput: testCase.testInput ? JSON.stringify(testCase.testInput) : null,
-        expectedOutputSchema: testCase.expectedOutputSchema ? JSON.stringify(testCase.expectedOutputSchema) : null,
-        actualOutput: result.actualOutput ? JSON.stringify(result.actualOutput) : null,
+        testInput: testCase.testInput ? JSON.stringify(testCase.testInput) : undefined,
+        expectedOutputSchema: testCase.expectedOutputSchema ? JSON.stringify(testCase.expectedOutputSchema) : undefined,
+        actualOutput: result.actualOutput ? JSON.stringify(result.actualOutput) : undefined,
         passed: result.passed ? 1 : 0,
-        errorMessage: result.errorMessage || null,
+        errorMessage: result.errorMessage || undefined,
         responseTime: result.responseTime,
         statusCode: result.statusCode,
         schemaValid: result.schemaValid ? 1 : 0,
@@ -149,15 +154,16 @@ export async function validateService(request: ValidationRequest): Promise<Valid
       .limit(1);
 
     if (existingValidated.length > 0) {
+      const existing = existingValidated[0];
       await db
         .update(validatedServices)
         .set({
           validationStatus: status,
           validationScore: score,
           lastValidatedAt: new Date(),
-          validationCount: sql`${validatedServices.validVoteCount} + 1`,
-          testnetChain: testnetChain || null,
-          validatedByAddress: request.userAddress,
+          validVoteCount: (existing.validVoteCount || 0) + 1,
+          testnetChain: testnetChain || undefined,
+          lastValidatedByAddress: request.userAddress,
           validationMode: request.validationMode,
           validationResults: JSON.stringify({ score, testsPassed, testsFailed }),
           updatedAt: new Date(),
@@ -170,12 +176,56 @@ export async function validateService(request: ValidationRequest): Promise<Valid
         validationStatus: status,
         validationScore: score,
         lastValidatedAt: new Date(),
-        validationCount: 1,
-        testnetChain: testnetChain || null,
-        validatedByAddress: request.userAddress,
+        validVoteCount: 1,
+        testnetChain: testnetChain || undefined,
+        lastValidatedByAddress: request.userAddress,
         validationMode: request.validationMode,
         validationResults: JSON.stringify({ score, testsPassed, testsFailed }),
       });
+    }
+
+    // 8. Update discovered_services with inferred output schema if validation was successful
+    if (status === 'verified' && testResults.length > 0) {
+      try {
+        // Get the best actual output from successful tests
+        const successfulResults = testResults.filter(r => r.passed && r.actualOutput);
+        if (successfulResults.length > 0) {
+          // Use the first successful result's output to infer schema
+          const actualOutput = successfulResults[0].actualOutput;
+          const inferredSchema = inferSchemaFromResponse(actualOutput);
+
+          // Get existing schema from discovered_services
+          const supabase = createSupabaseAdminClient();
+          const { data: existingService } = await supabase
+            .from('discovered_services')
+            .select('output_schema')
+            .eq('service_id', request.serviceId)
+            .single();
+
+          const existingSchema = existingService?.output_schema 
+            ? JSON.parse(existingService.output_schema) 
+            : null;
+
+          // Get the best schema using comparative analysis
+          const bestSchema = getBestSchema(existingSchema, inferredSchema);
+
+          // Only update if the new schema is better
+          if (JSON.stringify(bestSchema) !== JSON.stringify(existingSchema)) {
+            await supabase
+              .from('discovered_services')
+              .update({
+                output_schema: JSON.stringify(bestSchema),
+                updated_at: new Date().toISOString(),
+              })
+              .eq('service_id', request.serviceId);
+
+            console.log(`[Validation] Updated output schema for service ${request.serviceId}`);
+          }
+        }
+      } catch (error) {
+        // Log error but don't fail validation if schema update fails
+        console.error('[Validation] Error updating output schema:', error);
+      }
     }
 
     return {

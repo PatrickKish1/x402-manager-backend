@@ -254,3 +254,24 @@ export const blockchainTransactionsCache = pgTable('blockchain_transactions_cach
   blockTimestamp: timestamp('block_timestamp').notNull(),
   cachedAt: timestamp('cached_at').notNull().defaultNow(),
 });
+
+// Discovered Services (from CDP Bazaar - synced and stored locally)
+export const discoveredServices = pgTable('discovered_services', {
+  id: serial('id').primaryKey(),
+  serviceId: text('service_id').notNull().unique(), // Unique ID generated from resource URL
+  resource: text('resource').notNull().unique(), // The service resource URL (unique identifier)
+  type: text('type'), // Service type (e.g., 'api', 'data')
+  x402Version: integer('x402_version').notNull().default(1),
+  lastUpdated: timestamp('last_updated'), // Last update from CDP Bazaar
+  metadata: text('metadata'), // JSON string of metadata
+  accepts: text('accepts'), // JSON string of payment requirements
+  description: text('description'), // Extracted from metadata
+  name: text('name'), // Extracted from metadata
+  tags: text('tags'), // JSON array of tags
+  network: text('network'), // Extracted from accepts
+  price: text('price'), // Extracted from accepts (maxAmountRequired)
+  outputSchema: text('output_schema'), // JSON schema inferred from successful validation responses
+  syncedAt: timestamp('synced_at').notNull().defaultNow(), // When we last synced this service
+  createdAt: timestamp('created_at').notNull().defaultNow(), // When we first discovered it
+  updatedAt: timestamp('updated_at').notNull().defaultNow(), // Last time we updated this record
+});

@@ -64,6 +64,11 @@ export class AnalyticsService {
    * Record an API call for analytics
    */
   async recordCall(call: AnalyticsCall): Promise<void> {
+    if (!db) {
+      console.warn('[Analytics] Database not available, skipping analytics recording');
+      return;
+    }
+
     try {
       const timestamp = new Date();
       const dateStr = timestamp.toISOString().split('T')[0]; // YYYY-MM-DD
@@ -100,6 +105,8 @@ export class AnalyticsService {
    * Update service-level statistics
    */
   private async updateServiceStats(call: AnalyticsCall, timestamp: Date): Promise<void> {
+    if (!db) return;
+
     const existing = await db
       .select()
       .from(serviceStats)
@@ -161,6 +168,8 @@ export class AnalyticsService {
    * Update user-level statistics
    */
   private async updateUserStats(call: AnalyticsCall, timestamp: Date): Promise<void> {
+    if (!db) return;
+
     const existing = await db
       .select()
       .from(userStats)
@@ -206,6 +215,8 @@ export class AnalyticsService {
    * Update endpoint-level statistics
    */
   private async updateEndpointStats(call: AnalyticsCall, timestamp: Date): Promise<void> {
+    if (!db) return;
+
     const existing = await db
       .select()
       .from(endpointStats)
@@ -262,6 +273,8 @@ export class AnalyticsService {
    * Update daily statistics
    */
   private async updateDailyStats(call: AnalyticsCall, dateStr: string, timestamp: Date): Promise<void> {
+    if (!db) return;
+
     const existing = await db
       .select()
       .from(dailyStats)
@@ -327,6 +340,11 @@ export class AnalyticsService {
     serviceId: string,
     timeRange: '7d' | '30d' | '90d' | '1y' = '30d'
   ): Promise<ServiceAnalytics | null> {
+    if (!db) {
+      console.warn('[Analytics] Database not available, cannot fetch analytics');
+      return null;
+    }
+
     try {
       const now = new Date();
       const days = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : timeRange === '90d' ? 90 : 365;
