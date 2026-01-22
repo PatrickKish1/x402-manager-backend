@@ -54,8 +54,8 @@ export async function signX402Payment(request: X402PaymentRequest): Promise<X402
     throw new Error(`No validator wallet configured for network: ${network}`);
   }
 
-  // Create account
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  // Create account (private key is already normalized by getValidatorPrivateKey)
+  const account = privateKeyToAccount(privateKey);
   const from = fromAddress || account.address;
 
   // Get chain config
@@ -138,9 +138,21 @@ export async function signX402Payment(request: X402PaymentRequest): Promise<X402
 }
 
 /**
+ * Normalize private key to ensure proper format
+ */
+function normalizePrivateKey(key: string): `0x${string}` {
+  const trimmedKey = key.trim();
+  const prefixedKey = trimmedKey.startsWith('0x') ? trimmedKey : `0x${trimmedKey}`;
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(prefixedKey)) {
+    throw new Error(`Invalid private key format. Expected 64 hex characters (or 66 with '0x' prefix), got ${trimmedKey.length} characters.`);
+  }
+  return prefixedKey as `0x${string}`;
+}
+
+/**
  * Get validator private key for specific network
  */
-function getValidatorPrivateKey(network: string): string | undefined {
+function getValidatorPrivateKey(network: string): `0x${string}` | undefined {
   const keyMap: Record<string, string | undefined> = {
     'base-sepolia': process.env.VALIDATOR_WALLET_PRIVATE_KEY_BASE_SEPOLIA,
     'sepolia': process.env.VALIDATOR_WALLET_PRIVATE_KEY_SEPOLIA,
@@ -149,7 +161,14 @@ function getValidatorPrivateKey(network: string): string | undefined {
     'polygon-mumbai': process.env.VALIDATOR_WALLET_PRIVATE_KEY_POLYGON_MUMBAI,
   };
 
-  return keyMap[network.toLowerCase()];
+  const privateKey = keyMap[network.toLowerCase()];
+  
+  if (!privateKey) {
+    return undefined;
+  }
+
+  // Normalize private key using helper function
+  return normalizePrivateKey(privateKey);
 }
 
 /**

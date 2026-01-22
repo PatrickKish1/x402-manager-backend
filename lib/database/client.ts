@@ -1,70 +1,56 @@
 // Database Client Setup
-// Using Supabase with Drizzle ORM via Supabase SSR
+// Using Supabase with Drizzle ORM (following Supabase's recommended approach)
 
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema';
-import { createSupabaseAdminClient } from '../supabase/server';
 
-// Get Supabase connection from environment
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// Connection string from environment
+const connectionString = process.env.DATABASE_URL;
 
-// Create postgres connection from Supabase client
-// We'll use the Supabase client's connection internally
+// Postgres client and Drizzle instance
 let client: postgres.Sql | null = null;
 let db: ReturnType<typeof drizzle> | null = null;
 
-// Initialize database connection using Supabase
+// Initialize database connection
 export async function initializeDatabaseConnection() {
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
-    console.warn('Supabase environment variables not set. Database features will be unavailable.');
+  if (!connectionString) {
+    console.warn('DATABASE_URL not set. Drizzle ORM features will be unavailable.');
+    console.warn('Get DATABASE_URL from Supabase: Project Settings > Database > Connection string > Connection pooling (Transaction mode)');
     return;
   }
 
   try {
-    // Create Supabase admin client to get connection string
-    const supabase = createSupabaseAdminClient();
-    
-    // Extract connection details from Supabase URL
-    // Supabase URL format: https://[project-ref].supabase.co
-    // We need to construct the PostgreSQL connection string
-    const projectRef = supabaseUrl.replace('https://', '').replace('.supabase.co', '');
-    
-    // Get database password from environment or use service role key
-    // For Supabase, we can use the connection pooling URL
-    const connectionString = process.env.SUPABASE_DB_PASSWORD
-      ? `postgresql://postgres.${projectRef}:${encodeURIComponent(process.env.SUPABASE_DB_PASSWORD)}@aws-0-${projectRef.split('.')[0]}.pooler.supabase.com:6543/postgres`
-      : process.env.DATABASE_URL; // Fallback to DATABASE_URL if provided
-
-    if (!connectionString) {
-      console.warn('No database connection string available. Using Supabase client directly.');
-      return;
-    }
-
-    // Create postgres client
-    client = postgres(connectionString, {
+    // Disable prefetch as it is not supported for "Transaction" pool mode
+    // This is Supabase's recommended configuration for connection pooling
+    client = postgres(connectionString, { 
+      prepare: false,
       max: 10,
       idle_timeout: 20,
       connect_timeout: 10,
     });
 
-    // Create Drizzle instance
+    // Create Drizzle instance with schema
     db = drizzle(client, { schema });
 
     // Test connection
     await client`SELECT 1`;
     
-    console.log('Database connection initialized');
+    console.log('Database connection initialized successfully');
   } catch (error: any) {
     console.error('Error initializing database connection:', error.message);
+    if (error.message?.includes('Invalid URL') || error.message?.includes('invalid connection')) {
+      console.error('Invalid DATABASE_URL format. Check that your connection string is correct.');
+      console.error('Expected format: postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres');
+    }
     client = null;
     db = null;
   }
 }
 
 // Initialize on module load (for server-side)
-if (typeof window === 'undefined') {
+// Skip initialization during build time to avoid connection errors
+if (typeof window === 'undefined' && process.env.NEXT_PHASE !== 'phase-production-build') {
   initializeDatabaseConnection().catch(console.error);
 }
 

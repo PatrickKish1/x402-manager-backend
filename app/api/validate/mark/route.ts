@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/database/client';
-import { validatedServices, validationVotes } from '@/lib/database/schema';
-import { eq, and, sql } from 'drizzle-orm';
+import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
 /**
  * POST /api/validate/mark
@@ -9,6 +7,22 @@ import { eq, and, sql } from 'drizzle-orm';
  */
 export async function POST(request: NextRequest) {
   try {
+    // Check if Supabase is configured
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      return NextResponse.json(
+        { 
+          error: 'Supabase not configured',
+          details: 'Please set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables',
+        },
+        { status: 503 }
+      );
+    }
+
+    const supabase = createSupabaseAdminClient();
+
     const body = await request.json();
     const { 
       serviceId, 
@@ -22,16 +36,20 @@ export async function POST(request: NextRequest) {
     } = body;
 
     // Validate input
-    if (!serviceId) {
+    if (!service) {
       return NextResponse.json(
-        { error: 'Service ID is required' },
+        { error: 'Service data is required' },
         { status: 400 }
       );
     }
 
-    if (!service) {
+    // Use the service's actual serviceId from the service object (backend-generated)
+    // This ensures consistency with the database
+    const actualServiceId = service.serviceId || service.id || serviceId;
+    
+    if (!actualServiceId) {
       return NextResponse.json(
-        { error: 'Service data is required' },
+        { error: 'Service ID is required. Service object must have serviceId or id field.' },
         { status: 400 }
       );
     }
@@ -88,15 +106,6 @@ export async function POST(request: NextRequest) {
                          testResponse?.validation?.error || 
                          (vote === 'invalid' ? 'Service validation failed' : null);
 
-    // Check database connection
-    if (!db) {
-      console.error('[Mark Validated API] Database connection not available');
-      return NextResponse.json(
-        { error: 'Service temporarily unavailable. Please try again later.' },
-        { status: 503 }
-      );
-    }
-
     let existingVote;
     let validCount = 0;
     let invalidCount = 0;
@@ -104,73 +113,74 @@ export async function POST(request: NextRequest) {
     let validationScore = 0;
     let existing;
 
-    try {
-      // Check if user already voted
-      existingVote = await db
-        .select()
-        .from(validationVotes)
-        .where(
-          and(
-            eq(validationVotes.serviceId, serviceId),
-            eq(validationVotes.userAddress, userAddress)
-          )
-        )
-        .limit(1);
-    } catch (dbError) {
-      console.error('[Mark Validated API] Database error checking existing vote:', dbError);
+    // Check if user already voted
+    const { data: existingVoteData, error: voteCheckError } = await supabase
+      .from('validation_votes')
+      .select('*')
+      .eq('service_id', actualServiceId)
+      .eq('user_address', userAddress)
+      .limit(1)
+      .maybeSingle();
+
+    if (voteCheckError && !voteCheckError.message.includes('relation') && !voteCheckError.message.includes('does not exist')) {
+      console.error('[Mark Validated API] Database error checking existing vote:', voteCheckError);
       throw new Error('Database operation failed');
     }
 
-    try {
-      // Insert or update vote
-      if (existingVote.length > 0) {
-        // Update existing vote
-        await db
-          .update(validationVotes)
-          .set({
-            vote,
-            reason: invalidReason,
-            validationDetails: validationDetails ? JSON.stringify(validationDetails) : null,
-            testResponse: testResponse ? JSON.stringify(testResponse) : null,
-            updatedAt: new Date(),
-          })
-          .where(eq(validationVotes.id, existingVote[0].id));
-      } else {
-        // Create new vote
-        await db
-          .insert(validationVotes)
-          .values({
-            serviceId,
-            userAddress,
-            vote,
-            reason: invalidReason,
-            validationDetails: validationDetails ? JSON.stringify(validationDetails) : null,
-            testResponse: testResponse ? JSON.stringify(testResponse) : null,
-            validationMode,
-            testnetChain: detectedTestnetChain || null,
-          });
-      }
-    } catch (dbError) {
-      console.error('[Mark Validated API] Database error saving vote:', dbError);
-      throw new Error('Database operation failed');
-    }
+    existingVote = existingVoteData ? [existingVoteData] : [];
 
-    try {
-      // Get vote counts
-      const voteCounts = await db
-        .select({
-          validCount: sql<number>`COUNT(CASE WHEN ${validationVotes.vote} = 'valid' THEN 1 END)`,
-          invalidCount: sql<number>`COUNT(CASE WHEN ${validationVotes.vote} = 'invalid' THEN 1 END)`,
+    // Insert or update vote
+    if (existingVote.length > 0) {
+      // Update existing vote
+      const { error: updateError } = await supabase
+        .from('validation_votes')
+        .update({
+          vote,
+          reason: invalidReason || null,
+          validation_details: validationDetails ? JSON.stringify(validationDetails) : null,
+          test_response: testResponse ? JSON.stringify(testResponse) : null,
+          updated_at: new Date().toISOString(),
         })
-        .from(validationVotes)
-        .where(eq(validationVotes.serviceId, serviceId));
+        .eq('id', existingVote[0].id);
 
-      validCount = Number(voteCounts[0]?.validCount || 0);
-      invalidCount = Number(voteCounts[0]?.invalidCount || 0);
-    } catch (dbError) {
-      console.error('[Mark Validated API] Database error getting vote counts:', dbError);
+      if (updateError) {
+        console.error('[Mark Validated API] Database error updating vote:', updateError);
+        throw new Error('Database operation failed');
+      }
+    } else {
+      // Create new vote
+      const { error: insertError } = await supabase
+        .from('validation_votes')
+        .insert({
+          service_id: actualServiceId,
+          user_address: userAddress,
+          vote,
+          reason: invalidReason || null,
+          validation_details: validationDetails ? JSON.stringify(validationDetails) : null,
+          test_response: testResponse ? JSON.stringify(testResponse) : null,
+          validation_mode: validationMode,
+          testnet_chain: detectedTestnetChain || null,
+        });
+
+      if (insertError) {
+        console.error('[Mark Validated API] Database error inserting vote:', insertError);
+        throw new Error('Database operation failed');
+      }
+    }
+
+    // Get vote counts
+    const { data: allVotes, error: votesError } = await supabase
+      .from('validation_votes')
+      .select('vote')
+      .eq('service_id', actualServiceId);
+
+    if (votesError) {
+      console.error('[Mark Validated API] Database error getting vote counts:', votesError);
       throw new Error('Database operation failed');
     }
+
+    validCount = allVotes?.filter(v => v.vote === 'valid').length || 0;
+    invalidCount = allVotes?.filter(v => v.vote === 'invalid').length || 0;
 
     // Calculate validation status based on votes
     if (validCount > invalidCount) {
@@ -198,63 +208,72 @@ export async function POST(request: NextRequest) {
       reason: invalidReason,
     };
 
-    try {
-      // Update or create validated service record
-      existing = await db
-        .select()
-        .from(validatedServices)
-        .where(eq(validatedServices.serviceId, serviceId))
-        .limit(1);
-    } catch (dbError) {
-      console.error('[Mark Validated API] Database error checking existing service:', dbError);
+    // Check existing validated service record
+    const { data: existingService, error: serviceCheckError } = await supabase
+      .from('validated_services')
+      .select('*')
+      .eq('service_id', actualServiceId)
+      .limit(1)
+      .maybeSingle();
+
+    if (serviceCheckError && !serviceCheckError.message.includes('relation') && !serviceCheckError.message.includes('does not exist')) {
+      console.error('[Mark Validated API] Database error checking existing service:', serviceCheckError);
       throw new Error('Database operation failed');
     }
 
-    try {
-      if (existing.length > 0) {
-        // Update existing record
-        await db
-          .update(validatedServices)
-          .set({
-            validationStatus,
-            validationScore,
-            lastValidatedAt: new Date(),
-            validVoteCount: validCount,
-            invalidVoteCount: invalidCount,
-            testnetChain: detectedTestnetChain || existing[0].testnetChain,
-            lastValidatedByAddress: userAddress,
-            validationMode,
-            validationResults: JSON.stringify(validationResults),
-            updatedAt: new Date(),
-          })
-          .where(eq(validatedServices.serviceId, serviceId));
-      } else {
-        // Create new record
-        await db
-          .insert(validatedServices)
-          .values({
-            serviceId,
-            serviceName,
-            validationStatus,
-            validationScore,
-            lastValidatedAt: new Date(),
-            validVoteCount: validCount,
-            invalidVoteCount: invalidCount,
-            testnetChain: detectedTestnetChain || null,
-            lastValidatedByAddress: userAddress,
-            validationMode,
-            validationResults: JSON.stringify(validationResults),
-          });
+    existing = existingService ? [existingService] : [];
+
+    // Update or create validated service record
+    if (existing.length > 0) {
+      // Update existing record
+      const { error: updateError } = await supabase
+        .from('validated_services')
+        .update({
+          validation_status: validationStatus,
+          validation_score: validationScore,
+          last_validated_at: new Date().toISOString(),
+          valid_vote_count: validCount,
+          invalid_vote_count: invalidCount,
+          testnet_chain: detectedTestnetChain || existing[0].testnet_chain || null,
+          last_validated_by_address: userAddress,
+          validation_mode: validationMode,
+          validation_results: JSON.stringify(validationResults),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('service_id', actualServiceId);
+
+      if (updateError) {
+        console.error('[Mark Validated API] Database error updating service record:', updateError);
+        throw new Error('Database operation failed');
       }
-    } catch (dbError) {
-      console.error('[Mark Validated API] Database error updating service record:', dbError);
-      throw new Error('Database operation failed');
+    } else {
+      // Create new record
+      const { error: insertError } = await supabase
+        .from('validated_services')
+        .insert({
+          service_id: actualServiceId,
+          service_name: serviceName,
+          validation_status: validationStatus,
+          validation_score: validationScore,
+          last_validated_at: new Date().toISOString(),
+          valid_vote_count: validCount,
+          invalid_vote_count: invalidCount,
+          testnet_chain: detectedTestnetChain || null,
+          last_validated_by_address: userAddress,
+          validation_mode: validationMode,
+          validation_results: JSON.stringify(validationResults),
+        });
+
+      if (insertError) {
+        console.error('[Mark Validated API] Database error inserting service record:', insertError);
+        throw new Error('Database operation failed');
+      }
     }
 
     return NextResponse.json({
       success: true,
       message: `Service marked as ${vote} successfully`,
-      serviceId,
+      serviceId: actualServiceId,
       vote,
       validationStatus,
       validationScore,

@@ -1,7 +1,5 @@
 // Abuse Prevention System - Rate limiting and budget controls
-import { db } from '../database/client';
-import { validationRequests } from '../database/schema';
-import { eq, and, gte, sql } from 'drizzle-orm';
+import { createSupabaseAdminClient } from '../supabase/server';
 
 export interface AbuseCheckRequest {
   userAddress: string;
@@ -49,9 +47,7 @@ const LIMITS = {
  * Check if validation request should be allowed
  */
 export async function checkAbuseLimit(request: AbuseCheckRequest): Promise<AbuseCheckResult> {
-  if (!db) {
-    return { allowed: true }; // Fail open if DB unavailable
-  }
+  const supabase = createSupabaseAdminClient();
 
   // Skip abuse checks for user-paid validations
   if (request.validationMode === 'user-paid') {
@@ -109,26 +105,28 @@ export async function checkAbuseLimit(request: AbuseCheckRequest): Promise<Abuse
  * Check user daily validation limit
  */
 async function checkUserDailyLimit(userAddress: string): Promise<AbuseCheckResult> {
-  const oneDayAgo = new Date(Date.now() - 86400000);
+  const supabase = createSupabaseAdminClient();
+  const oneDayAgo = new Date(Date.now() - 86400000).toISOString();
 
-  const validations = await db!
-    .select()
-    .from(validationRequests)
-    .where(
-      and(
-        eq(validationRequests.requestedByAddress, userAddress),
-        eq(validationRequests.validationMode, 'free'),
-        gte(validationRequests.createdAt, oneDayAgo)
-      )
-    );
+  const { data: validations, error } = await supabase
+    .from('validation_requests')
+    .select('*')
+    .eq('requested_by_address', userAddress)
+    .eq('validation_mode', 'free')
+    .gte('created_at', oneDayAgo);
 
-  if (validations.length >= LIMITS.FREE_VALIDATIONS_PER_DAY) {
+  if (error) {
+    console.error('[Abuse Prevention] Error checking daily limit:', error);
+    return { allowed: true }; // Fail open
+  }
+
+  if ((validations?.length || 0) >= LIMITS.FREE_VALIDATIONS_PER_DAY) {
     return {
       allowed: false,
       reason: `Daily limit reached (${LIMITS.FREE_VALIDATIONS_PER_DAY} free validations per day)`,
       retryAfter: getTimeUntilMidnight(),
       currentUsage: {
-        userDailyValidations: validations.length,
+        userDailyValidations: validations?.length || 0,
         userWeeklyValidations: 0,
         ipHourlyValidations: 0,
         serviceDailyValidations: 0,
@@ -144,20 +142,22 @@ async function checkUserDailyLimit(userAddress: string): Promise<AbuseCheckResul
  * Check user weekly validation limit
  */
 async function checkUserWeeklyLimit(userAddress: string): Promise<AbuseCheckResult> {
-  const oneWeekAgo = new Date(Date.now() - 7 * 86400000);
+  const supabase = createSupabaseAdminClient();
+  const oneWeekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
-  const validations = await db!
-    .select()
-    .from(validationRequests)
-    .where(
-      and(
-        eq(validationRequests.requestedByAddress, userAddress),
-        eq(validationRequests.validationMode, 'free'),
-        gte(validationRequests.createdAt, oneWeekAgo)
-      )
-    );
+  const { data: validations, error } = await supabase
+    .from('validation_requests')
+    .select('*')
+    .eq('requested_by_address', userAddress)
+    .eq('validation_mode', 'free')
+    .gte('created_at', oneWeekAgo);
 
-  if (validations.length >= LIMITS.FREE_VALIDATIONS_PER_WEEK) {
+  if (error) {
+    console.error('[Abuse Prevention] Error checking weekly limit:', error);
+    return { allowed: true }; // Fail open
+  }
+
+  if ((validations?.length || 0) >= LIMITS.FREE_VALIDATIONS_PER_WEEK) {
     return {
       allowed: false,
       reason: `Weekly limit reached (${LIMITS.FREE_VALIDATIONS_PER_WEEK} free validations per week)`,
@@ -172,16 +172,24 @@ async function checkUserWeeklyLimit(userAddress: string): Promise<AbuseCheckResu
  * Check cooldown period between validations
  */
 async function checkCooldownPeriod(userAddress: string): Promise<AbuseCheckResult> {
-  const validations = await db!
-    .select()
-    .from(validationRequests)
-    .where(eq(validationRequests.requestedByAddress, userAddress))
-    .orderBy(sql`${validationRequests.createdAt} DESC`)
+  const supabase = createSupabaseAdminClient();
+
+  const { data: validations, error } = await supabase
+    .from('validation_requests')
+    .select('*')
+    .eq('requested_by_address', userAddress)
+    .order('created_at', { ascending: false })
     .limit(1);
 
-  if (validations.length > 0) {
+  if (error) {
+    console.error('[Abuse Prevention] Error checking cooldown:', error);
+    return { allowed: true }; // Fail open
+  }
+
+  if (validations && validations.length > 0) {
     const lastValidation = validations[0];
-    const timeSinceLastValidation = Date.now() - lastValidation.createdAt.getTime();
+    const lastValidationTime = new Date(lastValidation.created_at).getTime();
+    const timeSinceLastValidation = Date.now() - lastValidationTime;
     const cooldownPeriod = LIMITS.COOLDOWN_BETWEEN_REQUESTS * 1000;
 
     if (timeSinceLastValidation < cooldownPeriod) {
@@ -201,19 +209,21 @@ async function checkCooldownPeriod(userAddress: string): Promise<AbuseCheckResul
  * Check IP rate limit
  */
 async function checkIpRateLimit(ipAddress: string): Promise<AbuseCheckResult> {
-  const oneHourAgo = new Date(Date.now() - 3600000);
+  const supabase = createSupabaseAdminClient();
+  const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
 
-  const validations = await db!
-    .select()
-    .from(validationRequests)
-    .where(
-      and(
-        eq(validationRequests.requestedByIp, ipAddress),
-        gte(validationRequests.createdAt, oneHourAgo)
-      )
-    );
+  const { data: validations, error } = await supabase
+    .from('validation_requests')
+    .select('*')
+    .eq('requested_by_ip', ipAddress)
+    .gte('created_at', oneHourAgo);
 
-  if (validations.length >= LIMITS.REQUESTS_PER_HOUR) {
+  if (error) {
+    console.error('[Abuse Prevention] Error checking IP limit:', error);
+    return { allowed: true }; // Fail open
+  }
+
+  if ((validations?.length || 0) >= LIMITS.REQUESTS_PER_HOUR) {
     return {
       allowed: false,
       reason: 'Too many requests from your IP address',
@@ -228,20 +238,23 @@ async function checkIpRateLimit(ipAddress: string): Promise<AbuseCheckResult> {
  * Check service validation limit
  */
 async function checkServiceLimit(serviceId: string): Promise<AbuseCheckResult> {
-  const oneDayAgo = new Date(Date.now() - 86400000);
+  const supabase = createSupabaseAdminClient();
+  const oneDayAgo = new Date(Date.now() - 86400000).toISOString();
 
-  const validations = await db!
-    .select()
-    .from(validationRequests)
-    .where(
-      and(
-        eq(validationRequests.serviceId, serviceId),
-        eq(validationRequests.validationMode, 'free'),
-        gte(validationRequests.createdAt, oneDayAgo)
-      )
-    );
+  const { data: validations, error } = await supabase
+    .from('validation_requests')
+    .select('*')
+    .eq('service_id', serviceId)
+    .eq('validation_mode', 'free')
+    .gte('created_at', oneDayAgo)
+    .order('created_at', { ascending: false });
 
-  if (validations.length >= LIMITS.FREE_VALIDATIONS_PER_SERVICE_PER_DAY) {
+  if (error) {
+    console.error('[Abuse Prevention] Error checking service limit:', error);
+    return { allowed: true }; // Fail open
+  }
+
+  if ((validations?.length || 0) >= LIMITS.FREE_VALIDATIONS_PER_SERVICE_PER_DAY) {
     return {
       allowed: false,
       reason: 'Service validation limit reached for today',
@@ -250,9 +263,10 @@ async function checkServiceLimit(serviceId: string): Promise<AbuseCheckResult> {
   }
 
   // Check if last validation was too recent
-  if (validations.length > 0) {
+  if (validations && validations.length > 0) {
     const lastValidation = validations[0];
-    const timeSinceLastValidation = Date.now() - lastValidation.createdAt.getTime();
+    const lastValidationTime = new Date(lastValidation.created_at).getTime();
+    const timeSinceLastValidation = Date.now() - lastValidationTime;
     const minTimeBetween = LIMITS.MIN_TIME_BETWEEN_SERVICE_VALIDATIONS * 1000;
 
     if (timeSinceLastValidation < minTimeBetween) {
@@ -272,21 +286,21 @@ async function checkServiceLimit(serviceId: string): Promise<AbuseCheckResult> {
  * Check daily budget limit
  */
 async function checkDailyBudget(): Promise<AbuseCheckResult> {
-  const oneDayAgo = new Date(Date.now() - 86400000);
+  const supabase = createSupabaseAdminClient();
+  const oneDayAgo = new Date(Date.now() - 86400000).toISOString();
 
-  const result = await db!
-    .select({
-      total: sql<number>`COALESCE(SUM(${validationRequests.tokensSpent}), 0)`,
-    })
-    .from(validationRequests)
-    .where(
-      and(
-        eq(validationRequests.validationMode, 'free'),
-        gte(validationRequests.createdAt, oneDayAgo)
-      )
-    );
+  const { data: validations, error } = await supabase
+    .from('validation_requests')
+    .select('tokens_spent')
+    .eq('validation_mode', 'free')
+    .gte('created_at', oneDayAgo);
 
-  const totalSpent = result[0]?.total || 0;
+  if (error) {
+    console.error('[Abuse Prevention] Error checking daily budget:', error);
+    return { allowed: true }; // Fail open
+  }
+
+  const totalSpent = validations?.reduce((sum, v) => sum + (v.tokens_spent || 0), 0) || 0;
 
   // Alert if approaching threshold
   if (totalSpent >= LIMITS.ALERT_THRESHOLD) {
@@ -337,59 +351,44 @@ export async function getUserUsageStats(userAddress: string): Promise<{
   monthlyValidations: number;
   lastValidation: Date | null;
 }> {
-  if (!db) {
-    return {
-      dailyValidations: 0,
-      weeklyValidations: 0,
-      monthlyValidations: 0,
-      lastValidation: null,
-    };
-  }
+  const supabase = createSupabaseAdminClient();
+  const oneDayAgo = new Date(Date.now() - 86400000).toISOString();
+  const oneWeekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  const oneMonthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
 
-  const oneDayAgo = new Date(Date.now() - 86400000);
-  const oneWeekAgo = new Date(Date.now() - 7 * 86400000);
-  const oneMonthAgo = new Date(Date.now() - 30 * 86400000);
-
-  const [daily, weekly, monthly, last] = await Promise.all([
-    db.select()
-      .from(validationRequests)
-      .where(
-        and(
-          eq(validationRequests.requestedByAddress, userAddress),
-          eq(validationRequests.validationMode, 'free'),
-          gte(validationRequests.createdAt, oneDayAgo)
-        )
-      ),
-    db.select()
-      .from(validationRequests)
-      .where(
-        and(
-          eq(validationRequests.requestedByAddress, userAddress),
-          eq(validationRequests.validationMode, 'free'),
-          gte(validationRequests.createdAt, oneWeekAgo)
-        )
-      ),
-    db.select()
-      .from(validationRequests)
-      .where(
-        and(
-          eq(validationRequests.requestedByAddress, userAddress),
-          eq(validationRequests.validationMode, 'free'),
-          gte(validationRequests.createdAt, oneMonthAgo)
-        )
-      ),
-    db.select()
-      .from(validationRequests)
-      .where(eq(validationRequests.requestedByAddress, userAddress))
-      .orderBy(sql`${validationRequests.createdAt} DESC`)
-      .limit(1),
+  const [dailyResult, weeklyResult, monthlyResult, lastResult] = await Promise.all([
+    supabase
+      .from('validation_requests')
+      .select('*', { count: 'exact' })
+      .eq('requested_by_address', userAddress)
+      .eq('validation_mode', 'free')
+      .gte('created_at', oneDayAgo),
+    supabase
+      .from('validation_requests')
+      .select('*', { count: 'exact' })
+      .eq('requested_by_address', userAddress)
+      .eq('validation_mode', 'free')
+      .gte('created_at', oneWeekAgo),
+    supabase
+      .from('validation_requests')
+      .select('*', { count: 'exact' })
+      .eq('requested_by_address', userAddress)
+      .eq('validation_mode', 'free')
+      .gte('created_at', oneMonthAgo),
+    supabase
+      .from('validation_requests')
+      .select('created_at')
+      .eq('requested_by_address', userAddress)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single(),
   ]);
 
   return {
-    dailyValidations: daily.length,
-    weeklyValidations: weekly.length,
-    monthlyValidations: monthly.length,
-    lastValidation: last[0]?.createdAt || null,
+    dailyValidations: dailyResult.count || 0,
+    weeklyValidations: weeklyResult.count || 0,
+    monthlyValidations: monthlyResult.count || 0,
+    lastValidation: lastResult.data?.created_at ? new Date(lastResult.data.created_at) : null,
   };
 }
 

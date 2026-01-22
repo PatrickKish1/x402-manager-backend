@@ -1,8 +1,5 @@
 // Validator Engine - Core validation logic for x402 services from discovery
 import Ajv from 'ajv';
-import { db } from '../database/client';
-import { validationRequests, validationTestCases, validatedServices } from '../database/schema';
-import { eq, sql } from 'drizzle-orm';
 import { signX402Payment } from './x402-payment-signer';
 import { createSupabaseAdminClient } from '../supabase/server';
 import { inferSchemaFromResponse, getBestSchema } from '../services/schema-inference';
@@ -48,9 +45,7 @@ export interface TestResult {
  * Main validation function - validates an x402 service
  */
 export async function validateService(request: ValidationRequest): Promise<ValidationResult> {
-  if (!db) {
-    throw new Error('Database not available');
-  }
+  const supabase = createSupabaseAdminClient();
 
   const service = request.service;
   if (!service || !service.resource) {
@@ -67,19 +62,24 @@ export async function validateService(request: ValidationRequest): Promise<Valid
   // Ensure testnetChain is not null (required by schema)
   const finalTestnetChain = testnetChain || 'mainnet';
   
-  const [validationRecord] = await db
-    .insert(validationRequests)
-    .values({
-      serviceId: request.serviceId,
-      requestedByAddress: request.userAddress,
-      requestedByIp: request.ipAddress || undefined,
-      validationMode: request.validationMode,
+  const { data: validationRecord, error: insertError } = await supabase
+    .from('validation_requests')
+    .insert({
+      service_id: request.serviceId,
+      requested_by_address: request.userAddress,
+      requested_by_ip: request.ipAddress || null,
+      validation_mode: request.validationMode,
       status: 'pending',
-      testnetChain: finalTestnetChain,
-      tokensSpent: 0,
-      validationResults: undefined,
+      testnet_chain: finalTestnetChain,
+      tokens_spent: 0,
+      validation_results: null,
     })
-    .returning();
+    .select()
+    .single();
+
+  if (insertError || !validationRecord) {
+    throw new Error(`Failed to create validation request: ${insertError?.message || 'Unknown error'}`);
+  }
 
   try {
     // 3. Generate test cases from service
@@ -107,19 +107,21 @@ export async function validateService(request: ValidationRequest): Promise<Valid
       }
 
       // Store test case result
-      await db.insert(validationTestCases).values({
-        validationRequestId: validationRecord.id,
-        serviceId: request.serviceId,
+      await supabase
+        .from('validation_test_cases')
+        .insert({
+          validation_request_id: validationRecord.id,
+          service_id: request.serviceId,
         endpoint: testCase.endpoint,
         method: testCase.method,
-        testInput: testCase.testInput ? JSON.stringify(testCase.testInput) : undefined,
-        expectedOutputSchema: testCase.expectedOutputSchema ? JSON.stringify(testCase.expectedOutputSchema) : undefined,
-        actualOutput: result.actualOutput ? JSON.stringify(result.actualOutput) : undefined,
+          test_input: testCase.testInput ? JSON.stringify(testCase.testInput) : null,
+          expected_output_schema: testCase.expectedOutputSchema ? JSON.stringify(testCase.expectedOutputSchema) : null,
+          actual_output: result.actualOutput ? JSON.stringify(result.actualOutput) : null,
         passed: result.passed ? 1 : 0,
-        errorMessage: result.errorMessage || undefined,
-        responseTime: result.responseTime,
-        statusCode: result.statusCode,
-        schemaValid: result.schemaValid ? 1 : 0,
+          error_message: result.errorMessage || null,
+          response_time: result.responseTime,
+          status_code: result.statusCode,
+          schema_valid: result.schemaValid ? 1 : 0,
       });
     }
 
@@ -130,57 +132,59 @@ export async function validateService(request: ValidationRequest): Promise<Valid
     const status = score >= 70 ? 'verified' : 'failed';
 
     // 6. Update validation request with results
-    await db
-      .update(validationRequests)
-      .set({
+    await supabase
+      .from('validation_requests')
+      .update({
         status: 'completed',
-        tokensSpent: totalTokensSpent,
-        validationResults: JSON.stringify({
+        tokens_spent: totalTokensSpent,
+        validation_results: JSON.stringify({
           score,
           testsPassed,
           testsFailed,
           testResults,
         }),
       })
-      .where(eq(validationRequests.id, validationRecord.id));
+      .eq('id', validationRecord.id);
 
     // 7. Update or create validated service record
     const serviceName = service.metadata?.name || extractServiceName(service.resource);
     
-    const existingValidated = await db
-      .select()
-      .from(validatedServices)
-      .where(eq(validatedServices.serviceId, request.serviceId))
-      .limit(1);
+    const { data: existingValidated } = await supabase
+      .from('validated_services')
+      .select('*')
+      .eq('service_id', request.serviceId)
+      .limit(1)
+      .maybeSingle();
 
-    if (existingValidated.length > 0) {
-      const existing = existingValidated[0];
-      await db
-        .update(validatedServices)
-        .set({
-          validationStatus: status,
-          validationScore: score,
-          lastValidatedAt: new Date(),
-          validVoteCount: (existing.validVoteCount || 0) + 1,
-          testnetChain: testnetChain || undefined,
-          lastValidatedByAddress: request.userAddress,
-          validationMode: request.validationMode,
-          validationResults: JSON.stringify({ score, testsPassed, testsFailed }),
-          updatedAt: new Date(),
+    if (existingValidated) {
+      await supabase
+        .from('validated_services')
+        .update({
+          validation_status: status,
+          validation_score: score,
+          last_validated_at: new Date().toISOString(),
+          valid_vote_count: (existingValidated.valid_vote_count || 0) + 1,
+          testnet_chain: testnetChain || null,
+          last_validated_by_address: request.userAddress,
+          validation_mode: request.validationMode,
+          validation_results: JSON.stringify({ score, testsPassed, testsFailed }),
+          updated_at: new Date().toISOString(),
         })
-        .where(eq(validatedServices.serviceId, request.serviceId));
+        .eq('service_id', request.serviceId);
     } else {
-      await db.insert(validatedServices).values({
-        serviceId: request.serviceId,
-        serviceName,
-        validationStatus: status,
-        validationScore: score,
-        lastValidatedAt: new Date(),
-        validVoteCount: 1,
-        testnetChain: testnetChain || undefined,
-        lastValidatedByAddress: request.userAddress,
-        validationMode: request.validationMode,
-        validationResults: JSON.stringify({ score, testsPassed, testsFailed }),
+      await supabase
+        .from('validated_services')
+        .insert({
+          service_id: request.serviceId,
+          service_name: serviceName,
+          validation_status: status,
+          validation_score: score,
+          last_validated_at: new Date().toISOString(),
+          valid_vote_count: 1,
+          testnet_chain: testnetChain || null,
+          last_validated_by_address: request.userAddress,
+          validation_mode: request.validationMode,
+          validation_results: JSON.stringify({ score, testsPassed, testsFailed }),
       });
     }
 
@@ -242,13 +246,13 @@ export async function validateService(request: ValidationRequest): Promise<Valid
       testnetChain: testnetChain || 'mainnet',
     };
   } catch (error) {
-    await db
-      .update(validationRequests)
-      .set({
+    await supabase
+      .from('validation_requests')
+      .update({
         status: 'failed',
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        error_message: error instanceof Error ? error.message : 'Unknown error',
       })
-      .where(eq(validationRequests.id, validationRecord.id));
+      .eq('id', validationRecord.id);
 
     throw error;
   }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { validateService } from '@/lib/validator/engine';
 import { checkAbuseLimit, getUserUsageStats } from '@/lib/validator/abuse-prevention';
+import { createSupabaseAdminClient } from '@/lib/supabase/server';
 
 /**
  * POST /api/validate
@@ -8,6 +9,40 @@ import { checkAbuseLimit, getUserUsageStats } from '@/lib/validator/abuse-preven
  */
 export async function POST(request: NextRequest) {
   try {
+    // Check if Supabase is configured
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      return NextResponse.json(
+        { 
+          error: 'Supabase not configured',
+          details: 'Please set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables',
+          help: 'Get these from your Supabase project settings > API'
+        },
+        { status: 503 }
+      );
+    }
+
+    // Test Supabase connection
+    try {
+      const supabase = createSupabaseAdminClient();
+      const { error: testError } = await supabase.from('validation_requests').select('id').limit(1);
+      if (testError && !testError.message.includes('relation') && !testError.message.includes('does not exist')) {
+        throw testError;
+      }
+    } catch (dbError) {
+      console.error('[Validate API] Supabase connection failed:', dbError);
+      return NextResponse.json(
+        { 
+          error: 'Database connection failed',
+          details: dbError instanceof Error ? dbError.message : 'Unknown database error',
+          help: 'Please check your Supabase configuration and ensure the database is accessible'
+        },
+        { status: 503 }
+      );
+    }
+
     const body = await request.json();
     const { serviceId, service, validationMode = 'free', userAddress, userSignature } = body;
 
@@ -85,6 +120,21 @@ export async function POST(request: NextRequest) {
  */
 export async function GET(request: NextRequest) {
   try {
+    // Check if Supabase is configured
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      return NextResponse.json(
+        { 
+          error: 'Supabase not configured',
+          details: 'Please set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables',
+          help: 'Get these from your Supabase project settings > API'
+        },
+        { status: 503 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const userAddress = searchParams.get('userAddress');
 

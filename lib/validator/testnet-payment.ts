@@ -34,8 +34,8 @@ export async function signTestnetPayment(request: TestnetPaymentRequest): Promis
     throw new Error(`No validator wallet configured for network: ${network}`);
   }
 
-  // Create account from private key
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  // Create account from private key (already normalized by getValidatorPrivateKey)
+  const account = privateKeyToAccount(privateKey);
 
   // Create wallet client
   const chain = getChainConfig(network);
@@ -77,9 +77,21 @@ export async function signTestnetPayment(request: TestnetPaymentRequest): Promis
 }
 
 /**
+ * Normalize private key to ensure proper format
+ */
+function normalizePrivateKey(key: string): `0x${string}` {
+  const trimmedKey = key.trim();
+  const prefixedKey = trimmedKey.startsWith('0x') ? trimmedKey : `0x${trimmedKey}`;
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(prefixedKey)) {
+    throw new Error(`Invalid private key format. Expected 64 hex characters (or 66 with '0x' prefix), got ${trimmedKey.length} characters.`);
+  }
+  return prefixedKey as `0x${string}`;
+}
+
+/**
  * Get validator private key for specific testnet
  */
-function getValidatorPrivateKey(network: string): string | undefined {
+function getValidatorPrivateKey(network: string): `0x${string}` | undefined {
   const keyMap: Record<string, string | undefined> = {
     'base-sepolia': process.env.VALIDATOR_WALLET_PRIVATE_KEY_BASE_SEPOLIA,
     'sepolia': process.env.VALIDATOR_WALLET_PRIVATE_KEY_SEPOLIA,
@@ -89,7 +101,14 @@ function getValidatorPrivateKey(network: string): string | undefined {
     // Solana uses different signing, would need separate implementation
   };
 
-  return keyMap[network];
+  const privateKey = keyMap[network];
+  
+  if (!privateKey) {
+    return undefined;
+  }
+
+  // Normalize private key using helper function
+  return normalizePrivateKey(privateKey);
 }
 
 /**
@@ -134,7 +153,8 @@ export async function getValidatorBalance(network: string): Promise<bigint> {
     return BigInt(0);
   }
 
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  // Create account from private key (already normalized by getValidatorPrivateKey)
+  const account = privateKeyToAccount(privateKey);
   const chain = getChainConfig(network);
   
   const walletClient = createWalletClient({
